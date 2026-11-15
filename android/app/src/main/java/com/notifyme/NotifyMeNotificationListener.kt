@@ -19,6 +19,17 @@ class NotifyMeNotificationListener : NotificationListenerService() {
         private val PAYMENT_REGEX = Regex(
             """(?i)^(.*?)\bpaid you\b.*?₹\s*([0-9,]+(?:\.[0-9]{1,2})?)"""
         )
+
+        @Volatile
+        private var instance: NotifyMeNotificationListener? = null
+
+        fun refreshActiveNotifications(
+            onComplete: () -> Unit
+        ): Boolean {
+            val service = instance ?: return false
+            service.scanActiveNotifications(onComplete)
+            return true
+        }
     }
 
     private val storageExecutor = Executors.newSingleThreadExecutor()
@@ -29,12 +40,14 @@ class NotifyMeNotificationListener : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
 
+        instance = this
         paymentStorage = EncryptedPaymentStorage(applicationContext)
         speechManager = PaymentSpeechManager(applicationContext)
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        instance = this
         Log.i(TAG, "Notification Listener connected")
     }
 
@@ -43,70 +56,127 @@ class NotifyMeNotificationListener : NotificationListenerService() {
 
         if (sbn.packageName != GOOGLE_PAY_PACKAGE) return
 
-        val title = sbn.notification.extras
-            .getCharSequence("android.title")
-            ?.toString()
-            ?.trim()
+        storageExecutor.execute {
+            processPaymentNotification(sbn, announce = true)
+        }
+    }
 
-        if (title.isNullOrBlank()) {
-            Log.i(TAG, "Empty Google Pay notification ignored")
+    private fun scanActiveNotifications(onComplete: () -> Unit) {
+        val activeNotifications = try {
+            activeNotifications ?: emptyArray()
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to fetch active notifications", error)
+            onComplete()
             return
         }
-
-        val match = PAYMENT_REGEX.find(title)
-
-        if (match == null) {
-            Log.i(TAG, "No supported payment pattern found")
-            return
-        }
-
-        val sender = match.groupValues[1].trim()
-            .ifBlank { "Unknown" }
-
-        val amount = match.groupValues[2]
-            .replace(",", "")
-            .toBigDecimalOrNull()
-
-        if (amount == null || amount <= BigDecimal.ZERO) {
-            Log.w(TAG, "Invalid payment amount")
-            return
-        }
-
-        val amountPaise = try {
-            amount.movePointRight(2).longValueExact()
-        } catch (error: ArithmeticException) {
-            Log.w(TAG, "Invalid payment precision")
-            return
-        }
-
-        val eventId = sha256("${sbn.key}|${sbn.postTime}")
-
-        val record = PaymentRecord(
-            eventId = eventId,
-            amountPaise = amountPaise,
-            sender = sender,
-            receivedAtMillis = sbn.postTime
-        )
 
         storageExecutor.execute {
             try {
-                val saved = paymentStorage.savePayment(record)
-
-                if (saved) {
-                    Log.i(TAG, "Payment record saved securely")
-
-                    PaymentEventModule.emitPaymentSaved(applicationContext)
-                    Log.i(TAG, "PaymentSaved event emitted")
-
-                    // Announce only after successfully saving the payment.
-                    speechManager.announcePayment(amountPaise)
-                } else {
-                    Log.i(TAG, "Duplicate notification event ignored")
+                val googlePayNotifications = activeNotifications.filter {
+                    it.packageName == GOOGLE_PAY_PACKAGE
                 }
 
+                Log.i(
+                    TAG,
+                    "Manual refresh: scanning ${googlePayNotifications.size} active Google Pay notifications"
+                )
+
+                googlePayNotifications.forEach { notification ->
+                    processPaymentNotification(
+                        notification,
+                        announce = false
+                    )
+                }
+
+                Log.i(TAG, "Active notification scan completed")
+
             } catch (error: Exception) {
-                Log.e(TAG, "Payment processing failed", error)
+                Log.e(TAG, "Active notification scan failed", error)
+            } finally {
+                onComplete()
             }
+        }
+    }
+
+    private fun processPaymentNotification(
+        sbn: StatusBarNotification,
+        announce: Boolean
+    ) {
+        try {
+            val title = sbn.notification.extras
+                .getCharSequence("android.title")
+                ?.toString()
+                ?.trim()
+
+            if (title.isNullOrBlank()) {
+                return
+            }
+
+            val match = PAYMENT_REGEX.find(title)
+
+            if (match == null) {
+                return
+            }
+
+            val sender = match.groupValues[1].trim()
+                .ifBlank { "Unknown" }
+
+            val amount = match.groupValues[2]
+                .replace(",", "")
+                .toBigDecimalOrNull()
+
+            if (amount == null || amount <= BigDecimal.ZERO) {
+                Log.w(TAG, "Invalid payment amount")
+                return
+            }
+
+            val amountPaise = try {
+                amount.movePointRight(2).longValueExact()
+            } catch (error: ArithmeticException) {
+                Log.w(TAG, "Invalid payment precision")
+                return
+            }
+
+            val eventId = sha256(sbn.key)
+
+            val record = PaymentRecord(
+                eventId = eventId,
+                amountPaise = amountPaise,
+                sender = sender,
+                receivedAtMillis = sbn.postTime
+            )
+
+            val saved = paymentStorage.savePayment(record)
+
+            if (!saved) {
+                Log.i(TAG, "Duplicate notification event ignored")
+                return
+            }
+
+            Log.i(TAG, "Payment record saved securely")
+
+            PaymentEventModule.emitPaymentSaved(applicationContext)
+
+            if (announce) {
+                val voiceEnabled = getSharedPreferences(
+                    "notifyme_settings",
+                    MODE_PRIVATE
+                ).getBoolean("voice_enabled", true)
+
+                if (voiceEnabled) {
+                    speechManager.announcePayment(amountPaise)
+                } else {
+                    Log.i(TAG, "Voice announcements disabled. Skipping speech.")
+                }
+            } else {
+                Log.i(
+                    TAG,
+                    "Payment recovered by manual refresh. Voice announcement skipped."
+                )
+            }
+
+        } catch (error: Exception) {
+            Log.e(TAG, "Payment processing failed", error)
         }
     }
 
@@ -125,6 +195,10 @@ class NotifyMeNotificationListener : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        if (instance === this) {
+            instance = null
+        }
+
         storageExecutor.shutdown()
 
         if (::speechManager.isInitialized) {

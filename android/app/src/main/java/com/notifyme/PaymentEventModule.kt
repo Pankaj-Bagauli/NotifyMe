@@ -3,6 +3,7 @@ package com.notifyme
 
 import android.content.Context
 import com.facebook.react.ReactApplication
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -24,10 +25,23 @@ class PaymentEventModule(
         // Required by NativeEventEmitter.
     }
 
+    @ReactMethod
+    fun refreshActiveNotifications(promise: Promise) {
+        val started = NotifyMeNotificationListener.refreshActiveNotifications {
+            promise.resolve(true)
+        }
+
+        if (!started) {
+            promise.reject(
+                "NOTIFICATION_LISTENER_UNAVAILABLE",
+                "Notification listener is not connected."
+            )
+        }
+    }
+
     companion object {
         const val EVENT_PAYMENT_SAVED = "PaymentSaved"
 
-        
         fun emitPaymentSaved(context: Context) {
             val application = context.applicationContext as? ReactApplication
                 ?: return
@@ -44,6 +58,5 @@ class PaymentEventModule(
                 )
                 .emit(EVENT_PAYMENT_SAVED, null)
         }
-
     }
 }

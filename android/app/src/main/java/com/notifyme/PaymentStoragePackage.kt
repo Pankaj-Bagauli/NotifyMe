@@ -9,13 +9,14 @@ import com.facebook.react.uimanager.ViewManager
 class PaymentStoragePackage : ReactPackage {
 
     override fun createNativeModules(
-    reactContext: ReactApplicationContext
-): List<NativeModule> {
-    return listOf(
-        PaymentStorageModule(reactContext),
-        PaymentEventModule(reactContext)
-    )
-}
+        reactContext: ReactApplicationContext
+    ): List<NativeModule> {
+        return listOf(
+            PaymentStorageModule(reactContext),
+            PaymentEventModule(reactContext),
+            SettingsModule(reactContext)
+        )
+    }
 
     override fun createViewManagers(
         reactContext: ReactApplicationContext

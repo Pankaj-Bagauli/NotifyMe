@@ -1,12 +1,17 @@
+
 import React from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './src/navigation/AppNavigator';
+import { NotificationAccessProvider } from './src/context/NotificationAccessContext';
+import NotificationAccessPrompt from './src/components/NotificationAccessPrompt';
 
 const App = () => {
-  console.log('hello world');
   return (
     <SafeAreaProvider>
-      <AppNavigator />
+      <NotificationAccessProvider>
+        <AppNavigator />
+        <NotificationAccessPrompt />
+      </NotificationAccessProvider>
     </SafeAreaProvider>
   );
 };

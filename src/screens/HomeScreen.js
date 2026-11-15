@@ -9,17 +9,19 @@ import {
   ActivityIndicator,
   NativeEventEmitter,
   NativeModules,
+  TouchableOpacity,
 } from 'react-native';
 
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ghost, RefreshCw } from 'lucide-react-native';
+import { Ghost, RefreshCw, BellRing } from 'lucide-react-native';
 
 import colors from '../theme/colors';
 import AppHeader from '../components/AppHeader';
 import BalanceCard from '../components/BalanceCard';
 import PaymentHistoryItem from '../components/PaymentHistoryItem';
 import PaymentStorage from '../native/PaymentStorage';
+import { useNotificationAccess } from '../context/NotificationAccessContext';
 
 const getDateKey = timestamp => {
   const date = new Date(timestamp);
@@ -91,18 +93,7 @@ const HomeScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    const paymentEvents = new NativeEventEmitter(NativeModules.PaymentEvents);
-
-    const subscription = paymentEvents.addListener('PaymentSaved', () => {
-      console.log('New payment received. Refreshing history...');
-      loadPayments(true);
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [loadPayments]);
+  const { hasAccess, openNotificationSettings } = useNotificationAccess();
 
   const loadPayments = useCallback(async (isRefresh = false) => {
     try {
@@ -124,6 +115,19 @@ const HomeScreen = ({ navigation }) => {
       setRefreshing(false);
     }
   }, []);
+
+  useEffect(() => {
+    const paymentEvents = new NativeEventEmitter(NativeModules.PaymentEvents);
+
+    const subscription = paymentEvents.addListener('PaymentSaved', () => {
+      console.log('New payment received. Refreshing history...');
+      loadPayments(true);
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [loadPayments]);
 
   useFocusEffect(
     useCallback(() => {
@@ -166,6 +170,21 @@ const HomeScreen = ({ navigation }) => {
 
   const totalReceived = totalReceivedPaise / 100;
 
+  const handleRefresh = useCallback(async () => {
+    try {
+      if (NativeModules.PaymentEvents?.refreshActiveNotifications) {
+        await NativeModules.PaymentEvents.refreshActiveNotifications();
+      }
+    } catch (err) {
+      console.warn(
+        'Active notification scan unavailable:',
+        err?.code || 'UNKNOWN',
+      );
+    }
+
+    await loadPayments(true);
+  }, [loadPayments]);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar backgroundColor={colors.background} barStyle="dark-content" />
@@ -176,7 +195,28 @@ const HomeScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
         bounces={true}
       >
-        <AppHeader onSettingsPress={() => navigation.navigate('Settings')} />
+        <AppHeader
+          onSettingsPress={() => navigation.navigate('Settings')}
+          onRefreshPress={handleRefresh}
+          refreshing={refreshing}
+        />
+
+        {!hasAccess && (
+          <View style={styles.permissionBanner}>
+            <BellRing size={15} color="#D97706" strokeWidth={2} />
+
+            <Text style={styles.permissionText}>
+              Notification access is disabled.
+            </Text>
+
+            <TouchableOpacity
+              onPress={openNotificationSettings}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.permissionLink}>Allow access</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <BalanceCard
           amount={totalReceived}
@@ -261,6 +301,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 35,
+  },
+  permissionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginVertical: 10,
+    gap: 7,
+  },
+  permissionText: {
+    color: '#92400E',
+    fontSize: 11,
+    fontWeight: '500',
+    flex: 1,
+  },
+  permissionLink: {
+    color: '#2563EB',
+    fontSize: 11,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
   },
   historyHeader: {
     flexDirection: 'row',

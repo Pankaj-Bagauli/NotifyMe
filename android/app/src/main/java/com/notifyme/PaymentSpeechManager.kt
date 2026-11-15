@@ -21,10 +21,14 @@ class PaymentSpeechManager(context: Context) {
 
     private val pendingMessages = ConcurrentLinkedQueue<String>()
 
-    init {
-        textToSpeech = TextToSpeech(appContext) { status ->
+    
+init {
+    textToSpeech = TextToSpeech(appContext) { status ->
+        synchronized(this) {
+            if (isReleased) return@synchronized
+
             if (status == TextToSpeech.SUCCESS) {
-                val engine = textToSpeech ?: return@TextToSpeech
+                val engine = textToSpeech ?: return@synchronized
 
                 val result = engine.setLanguage(Locale("hi", "IN"))
                 Log.i(TAG, "Hindi language result: $result")
@@ -34,6 +38,33 @@ class PaymentSpeechManager(context: Context) {
                 ) {
                     engine.setSpeechRate(0.95f)
                     engine.setPitch(1.0f)
+
+                    engine.setOnUtteranceProgressListener(
+                        object : UtteranceProgressListener() {
+                            override fun onStart(utteranceId: String?) {
+                                Log.i(TAG, "Speech started: $utteranceId")
+                            }
+
+                            override fun onDone(utteranceId: String?) {
+                                Log.i(TAG, "Speech completed: $utteranceId")
+                            }
+
+                            override fun onError(utteranceId: String?) {
+                                Log.e(TAG, "Speech failed: $utteranceId")
+                            }
+
+                            override fun onError(
+                                utteranceId: String?,
+                                errorCode: Int
+                            ) {
+                                Log.e(
+                                    TAG,
+                                    "Speech failed: $utteranceId, errorCode: $errorCode"
+                                )
+                            }
+                        }
+                    )
+
                     isInitialized = true
 
                     Log.i(TAG, "Hindi TTS initialized")
@@ -42,10 +73,11 @@ class PaymentSpeechManager(context: Context) {
                     Log.w(TAG, "Hindi TTS language unavailable")
                 }
             } else {
-                Log.e(TAG, "TTS initialization failed")
+                Log.e(TAG, "TTS initialization failed: $status")
             }
         }
     }
+}
 
     @Synchronized
     fun announcePayment(amountPaise: Long) {
